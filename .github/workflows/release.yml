@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build bundle
+        run: npm run bundle
+
+      - name: Create release tarball
+        run: |
+          mkdir -p dist/release
+          cp dist/bundle.js dist/release/
+          cp scripts/protoc-gen-actrframework-typescript dist/release/
+          chmod +x dist/release/protoc-gen-actrframework-typescript
+          cd dist/release
+          tar czf ../protoc-gen-actrframework-typescript.tar.gz .
+          cd ../..
+          sha256sum dist/protoc-gen-actrframework-typescript.tar.gz | awk '{print $1}' > dist/protoc-gen-actrframework-typescript.tar.gz.sha256
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/protoc-gen-actrframework-typescript.tar.gz
+            dist/protoc-gen-actrframework-typescript.tar.gz.sha256
+          generate_release_notes: true
+
+      - name: Update Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          SHA256=$(cat dist/protoc-gen-actrframework-typescript.tar.gz.sha256)
+
+          # Clone the tap repository
+          git clone https://x-access-token:${GH_TOKEN}@github.com/actor-rtc/homebrew-tap.git tap
+
+          # Create or update the formula file
+          FORMULA="tap/Formula/protoc-gen-actrframework-typescript.rb"
+
+          cat > "$FORMULA" <<EOF
+          class ProtocGenActrframeworkTypescript < Formula
+            desc "TypeScript protoc plugin for generating ACTR framework stubs"
+            homepage "https://github.com/actor-rtc/framework-codegen-typescript"
+            version "$VERSION"
+            url "https://github.com/actor-rtc/framework-codegen-typescript/releases/download/v#{version}/protoc-gen-actrframework-typescript.tar.gz"
+            sha256 "$SHA256"
+
+            depends_on "node"
+
+            def install
+              libexec.install "bundle.js"
+              libexec.install "protoc-gen-actrframework-typescript"
+              (bin/"protoc-gen-actrframework-typescript").write_env_script(
+                libexec/"protoc-gen-actrframework-typescript",
+                NODE_PATH: libexec
+              )
+            end
+
+            test do
+              system "#{bin}/protoc-gen-actrframework-typescript", "--version"
+            end
+          end
+          EOF
+
+          # Commit and push
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Update protoc-gen-actrframework-typescript to v$VERSION" || echo "No changes to commit"
+          git push
