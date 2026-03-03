@@ -8,18 +8,20 @@
   },
   "scripts": {
     "build": "tsc",
-    "bundle": "esbuild src/main.ts --bundle --platform=node --target=node18 --outfile=dist/bundle.js",
+    "bundle": "esbuild src/main.ts --bundle --platform=node --target=node20 --external:typescript --outfile=dist/bundle.js",
     "check": "tsc --noEmit"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
-    "protobufjs": "^8.0.0"
+    "@bufbuild/protobuf": "^2.11.0",
+    "@bufbuild/protoplugin": "^2.11.0",
+    "typescript": "^5.6.3"
   },
   "devDependencies": {
+    "@bufbuild/protoc-gen-es": "^2.11.0",
     "@types/node": "^25.3.2",
-    "esbuild": "^0.27.3",
-    "typescript": "^5.6.3"
+    "esbuild": "^0.27.3"
   }
 }
