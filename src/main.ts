@@ -35,6 +35,33 @@ type LocalMethodEntry = {
   method: DescMethod;
 };
 
+type MethodMetadata = {
+  name: string;
+  snake_name: string;
+  input_type: string;
+  output_type: string;
+  route_key: string;
+};
+
+type LocalServiceMetadata = {
+  name: string;
+  package: string;
+  proto_file: string;
+  handler_interface: string;
+  workload_type: string;
+  dispatcher_type: string;
+  methods: MethodMetadata[];
+};
+
+type RemoteServiceMetadata = {
+  name: string;
+  package: string;
+  proto_file: string;
+  actr_type: string;
+  client_type: string;
+  methods: MethodMetadata[];
+};
+
 const VERSION = "0.1.11";
 
 const plugin = createEcmaScriptPlugin<PluginParams>({
@@ -51,6 +78,8 @@ runNodeJs(plugin);
 function generateTypeScript(schema: Schema<PluginParams>): void {
   const remoteDispatchEntries: RemoteDispatchEntry[] = [];
   const localMethods: LocalMethodEntry[] = [];
+  const localServiceMetadata: LocalServiceMetadata[] = [];
+  const remoteServiceMetadata: RemoteServiceMetadata[] = [];
   const fallbackTargetType = buildFallbackTargetType(
     schema.options.remoteFileMapping,
   );
@@ -67,6 +96,9 @@ function generateTypeScript(schema: Schema<PluginParams>): void {
     validateUniqueRequestBindings(requestOwners, analyzedMethods);
 
     if (role !== "remote") {
+      localServiceMetadata.push(
+        ...buildLocalServiceMetadata(file, analyzedMethods),
+      );
       for (const entry of analyzedMethods) {
         if (localCompanionNames.has(entry.requestCompanionName)) {
           throw new Error(
@@ -94,6 +126,10 @@ function generateTypeScript(schema: Schema<PluginParams>): void {
       );
     }
 
+    remoteServiceMetadata.push(
+      ...buildRemoteServiceMetadata(file, analyzedMethods, targetType),
+    );
+
     remoteDispatchEntries.push(
       ...buildRemoteDispatchEntries(file, targetType, analyzedMethods),
     );
@@ -105,6 +141,20 @@ function generateTypeScript(schema: Schema<PluginParams>): void {
   ) {
     generateLocalActorFile(schema, localMethods, remoteDispatchEntries);
   }
+
+  const metadataFile = schema.generateFile("actr-gen-meta.json");
+  metadataFile.print(
+    JSON.stringify(
+      {
+        plugin_version: VERSION,
+        language: "typescript",
+        local_services: localServiceMetadata,
+        remote_services: remoteServiceMetadata,
+      },
+      null,
+      2,
+    ),
+  );
 }
 
 function generateClientFile(
@@ -610,6 +660,73 @@ function analyzeFileMethods(file: DescFile): AnalyzedMethod[] {
   return analyzedMethods;
 }
 
+function buildLocalServiceMetadata(
+  file: DescFile,
+  analyzedMethods: AnalyzedMethod[],
+): LocalServiceMetadata[] {
+  return groupAnalyzedMethodsByService(analyzedMethods).map(
+    ([service, methods]) => ({
+      name: service.name,
+      package: packageNameForService(service),
+      proto_file: normalizePath(file.name),
+      handler_interface: "LocalHandlers",
+      workload_type: "Workload",
+      dispatcher_type: "dispatchLocalActor",
+      methods: methods.map((entry) => buildMethodMetadata(entry.method)),
+    }),
+  );
+}
+
+function buildRemoteServiceMetadata(
+  file: DescFile,
+  analyzedMethods: AnalyzedMethod[],
+  targetType: { manufacturer: string; name: string },
+): RemoteServiceMetadata[] {
+  return groupAnalyzedMethodsByService(analyzedMethods).map(
+    ([service, methods]) => ({
+      name: service.name,
+      package: packageNameForService(service),
+      proto_file: normalizePath(file.name),
+      actr_type: `${targetType.manufacturer}+${targetType.name}`,
+      client_type: `${service.name}Client`,
+      methods: methods.map((entry) => buildMethodMetadata(entry.method)),
+    }),
+  );
+}
+
+function groupAnalyzedMethodsByService(
+  analyzedMethods: AnalyzedMethod[],
+): Array<[DescService, AnalyzedMethod[]]> {
+  const grouped = new Map<DescService, AnalyzedMethod[]>();
+  for (const entry of analyzedMethods) {
+    const existing = grouped.get(entry.service);
+    if (existing) {
+      existing.push(entry);
+    } else {
+      grouped.set(entry.service, [entry]);
+    }
+  }
+  return Array.from(grouped.entries());
+}
+
+function buildMethodMetadata(method: DescMethod): MethodMetadata {
+  return {
+    name: method.name,
+    snake_name: toSnakeCase(method.name),
+    input_type: method.input.name,
+    output_type: method.output.name,
+    route_key: routeKeyForMethod(method),
+  };
+}
+
+function packageNameForService(service: DescService): string {
+  const suffix = `.${service.name}`;
+  if (service.typeName.endsWith(suffix)) {
+    return service.typeName.slice(0, -suffix.length);
+  }
+  return "";
+}
+
 function validateUniqueRequestBindings(
   requestOwners: Map<string, string>,
   analyzedMethods: AnalyzedMethod[],
@@ -677,4 +794,8 @@ function toPascalCase(value: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join("");
+}
+
+function toSnakeCase(value: string): string {
+  return value.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
 }
